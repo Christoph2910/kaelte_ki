@@ -23,10 +23,10 @@ try:
 except Exception as e:
     st.error(f"Fehler bei den OpenAI Secrets: {e}")
 
-# --- SEITENLEISTE: KUNDEN & DOKUMENTE ---
+# --- SEITENLEISTE: NUR NOCH KUNDEN-AUSWAHL ---
 st.sidebar.header("📁 Kunden-Akte / Chat")
 
-# 1. Kunden aus Supabase laden
+# Kunden aus Supabase laden
 try:
     response = supabase.table("chat_verlaeufe").select("kunde").execute()
     kunden_liste = sorted(list(set([row["kunde"] for row in response.data]))) if response.data else []
@@ -44,45 +44,38 @@ else:
 
 st.sidebar.markdown(f"**Aktuelles Projekt:** `{aktueller_kunde}`")
 
-st.sidebar.markdown("---")
-st.sidebar.header("📂 Dokumente hochladen")
-st.sidebar.markdown("Lade PDFs oder Textdateien für diesen Kunden hoch, damit die KI daraus lernen kann.")
+# --- HAUPTBEREICH: DIREKTER UPLOAD IM CHAT ---
+st.markdown("---")
+# Hier ist der direkte Upload-Bereich direkt im Hauptfenster
+with st.expander("📎 Dokument / PDF für diesen Kunden hochladen", expanded=False):
+    uploaded_file = st.file_uploader("Wähle eine PDF- oder Textdatei aus:", type=["pdf", "txt"])
+    
+    if uploaded_file is not None:
+        if st.button("💾 Datei jetzt für dieses Projekt einlesen & speichern"):
+            file_content = ""
+            if uploaded_file.type == "application/pdf":
+                try:
+                    reader = pypdf.PdfReader(uploaded_file)
+                    for page in reader.pages:
+                        text = page.extract_text()
+                        if text:
+                            file_content += text + "\n"
+                except Exception as e:
+                    st.error(f"Fehler beim Lesen der PDF: {e}")
+            else:
+                file_content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
-uploaded_file = st.sidebar.file_uploader("Datei hochladen (PDF, TXT)", type=["pdf", "txt"])
+            if file_content:
+                try:
+                    supabase.table("dokumente").insert({
+                        "name": f"[{aktueller_kunde}] {uploaded_file.name}",
+                        "inhalt": file_content
+                    }).execute()
+                    st.success(f"Erfolgreich gelernt: {uploaded_file.name}!")
+                except Exception as e:
+                    st.error(f"Fehler beim Speichern in Supabase: {e}")
 
-if uploaded_file is not None:
-    file_content = ""
-    # Text aus PDF extrahieren
-    if uploaded_file.type == "application/pdf":
-        try:
-            reader = pypdf.PdfReader(uploaded_file)
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    file_content += text + "\n"
-        except Exception as e:
-            st.sidebar.error(f"Fehler beim Lesen der PDF: {e}")
-    else:
-        # Normale Textdatei
-        file_content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-
-    if file_content:
-        if st.sidebar.button("💾 Dokument in Datenbank speichern"):
-            try:
-                # In Supabase speichern (Tabelle 'dokumente' nutzen wir dafür)
-                data = {
-                    "name": uploaded_file.name,
-                    "inhalt": file_content,
-                    "erstellt_am": "now()"
-                }
-                # Wir speichern es ab (wir können den Kunden-Namen auch im Dateinamen oder in einer Spalte hinterlegen)
-                supabase.table("dokumente").insert({
-                    "name": f"[{aktueller_kunde}] {uploaded_file.name}",
-                    "inhalt": file_content
-                }).execute()
-                st.sidebar.success(f"Erfolgreich gelernt: {uploaded_file.name}!")
-            except Exception as e:
-                st.sidebar.error(f"Fehler beim Speichern in Supabase: {e}")
+st.markdown("---")
 
 # --- CHAT-VERLAUF LADEN ---
 if "current_kunde" not in st.session_state or st.session_state["current_kunde"] != aktueller_kunde:
@@ -113,17 +106,14 @@ if prompt := st.chat_input(f"Frage an die Kälte-KI für {aktueller_kunde}..."):
     # Relevantes Wissen aus hochgeladenen Dokumenten abrufen
     kontext_wissen = ""
     try:
-        # Wir holen alle Dokumente aus der DB, die zum Kunden passen oder allgemein sind
         docs_res = supabase.table("dokumente").select("name, inhalt").execute()
         if docs_res.data:
             for doc in docs_res.data:
-                # Prüfen ob das Dokument den Kunden im Namen hat oder allgemein ist
                 if aktueller_kunde.lower() in doc["name"].lower() or "allgemein" in doc["name"].lower():
-                    kontext_wissen += f"\n--- Dokument: {doc['name']} ---\n{doc['inhalt'][:3000]}\n" # Kürzen zur Sicherheit
+                    kontext_wissen += f"\n--- Dokument: {doc['name']} ---\n{doc['inhalt'][:3000]}\n"
     except Exception as e:
         print(f"Fehler beim Laden des Dokumenten-Wissens: {e}")
 
-    # System-Prompt zusammenbauen, damit die KI das Wissen nutzt
     system_prompt = {
         "role": "system", 
         "content": (
@@ -133,10 +123,8 @@ if prompt := st.chat_input(f"Frage an die Kälte-KI für {aktueller_kunde}..."):
         )
     }
 
-    # Nachrichten für die API vorbereiten (System-Prompt + Verlauf)
     api_messages = [system_prompt] + [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
 
-    # Antwort von OpenAI generieren lassen
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -148,7 +136,6 @@ if prompt := st.chat_input(f"Frage an die Kälte-KI für {aktueller_kunde}..."):
         with st.chat_message("assistant"):
             st.markdown(assistant_reply)
             
-        # Chat in Supabase abspeichern
         existing = supabase.table("chat_verlaeufe").select("id").eq("kunde", aktueller_kunde).execute()
         if existing.data and len(existing.data) > 0:
             supabase.table("chat_verlaeufe").update({"nachrichten": st.session_state.messages}).eq("kunde", aktueller_kunde).execute()
