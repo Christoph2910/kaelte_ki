@@ -1,96 +1,104 @@
 import streamlit as st
-import os
 from openai import OpenAI
-from pypdf import PdfReader
+from supabase import create_client, Client
+import json
 
-# Seitenkonfiguration
-st.set_page_config(page_title="Kälte-KI Assistant", page_icon="❄️", layout="centered")
+# Titel der App
+st.title("❄️ Kälte-KI – Kunden-Datenbank & Projekt-Akte")
 
-st.title("❄️ Kälte-KI Assistant")
-st.caption("Dein permanenter Assistent für Kälte- und Klimatechnik (Gedächtnis aktiv)")
+# Verbindung zu Supabase & OpenAI aus den Streamlit Secrets laden
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"Fehler bei der Supabase-Verbindung (Secrets prüfen!): {e}")
 
-# OpenAI Client initialisieren (holt den Key sicher aus den Streamlit Secrets)
-if "OPENAI_API_KEY" in st.secrets:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-else:
-    st.error("OpenAI API-Schlüssel fehlt in den Streamlit Secrets!")
-    st.stop()
+try:
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+    client = OpenAI(api_key=openai_api_key)
+    MODEL_NAME = "gpt-4o" # Oder "gpt-4o-mini", je nachdem was du nutzt
+except Exception as e:
+    st.error(f"Fehler bei den OpenAI Secrets: {e}")
 
-# Modell-Auswahl (GPT-4o-mini ist super günstig, schnell und kann auch Fotos analysieren!)
-MODEL_NAME = "gpt-4o-mini"
+# --- SEITENLEISTE: KUNDEN / PROJEKTE VERWALTEN ---
+st.sidebar.header("📁 Kunden-Akte / Chat wählen")
 
-# 1. Chat-Verlauf im Session State initialisieren (damit er während der Session nicht verschwindet)
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": "Du bist ein genialer, präziser Experte für Mechatronik für Kältetechnik. Du hilfst bei Fehlersuche, Auslegung, Kältemitteln und Vorschriften."}
-    ]
+# 1. Bestehende Kunden aus Supabase laden
+try:
+    response = supabase.table("chat_verlaeufe").select("kunde").execute()
+    kunden_liste = sorted(list(set([row["kunde"] for row in response.data]))) if response.data else []
+except Exception:
+    kunden_liste = []
 
-# 2. Dauerhaftes Dokumenten-Gedächtnis initialisieren
-if "knowledge_base" not in st.session_state:
-    st.session_state.knowledge_base = ""
+# Option zum Erstellen eines neuen Kunden
+kunden_liste.insert(0, "+ Neuer Kunde / Neues Projekt")
+auswahl = st.sidebar.selectbox("Wähle einen Kunden:", kunden_liste)
 
-# --- SEITENMENÜ: Dokumente dauerhaft einlesen ---
-with st.sidebar:
-    st.header("📂 Wissensdatenbank")
-    st.write("Lade hier Handbücher hoch. Sie bleiben dauerhaft im System gespeichert (auch nach Schließen der App).")
-    
-    uploaded_files = st.file_uploader("PDFs hochladen", type=["pdf"], accept_multiple_files=True)
-    
-    if uploaded_files:
-        combined_text = ""
-        for file in uploaded_files:
-            pdf_reader = PdfReader(file)
-            for page in pdf_reader.pages:
-                text = page.extract_text()
-                if text:
-                    combined_text += text + "\n"
-        st.session_state.knowledge_base = combined_text
-        st.success(f"Wissen von {len(uploaded_files)} Dokument(en) erfolgreich gespeichert!")
-
-    if st.session_state.knowledge_base:
-        st.info("Status: Gedächtnis ist aktiv und gefüllt.")
+if auswahl == "+ Neuer Kunde / Neues Projekt":
+    neuer_kunde = st.sidebar.text_input("Name des Kunden / Projekts:")
+    if neuer_kunde:
+        aktueller_kunde = neuer_kunde.strip()
     else:
-        st.warning("Status: Noch kein Dokument hochgeladen.")
+        aktueller_kunde = "Allgemein"
+else:
+    aktueller_kunde = auswahl
 
-# --- HAUPTBEREICH: Chat mit Datei- & Bild-Upload ---
+st.sidebar.markdown(f"**Aktuelles Projekt:** `{aktueller_kunde}`")
 
-# Alten Chat-Verlauf anzeigen (ausgenommen die System-Nachricht)
-for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-# Chat-Eingabe unten (erlaubt Text UND Bilder/Dateien direkt wie bei Gemini/ChatGPT)
-if prompt := st.chat_input("Frage etwas zur Kältetechnik oder lade ein Foto/Dokument hoch..."):
+# --- CHAT-VERLAUF LADEN ---
+# Wenn wir den Kunden wechseln, laden wir die Nachrichten aus der Datenbank
+if "current_kunde" not in st.session_state or st.session_state["current_kunde"] != aktueller_kunde:
+    st.session_state["current_kunde"] = aktueller_kunde
+    st.session_state.messages = []
     
-    # Nutzer-Nachricht anzeigen
+    try:
+        res = supabase.table("chat_verlaeufe").select("nachrichten").eq("kunde", aktueller_kunde).execute()
+        if res.data and len(res.data) > 0:
+            # Nachrichten aus JSON Format wiederherstellen
+            st.session_state.messages = res.data[0]["nachrichten"]
+    except Exception as e:
+        print(f"Konnte Verlauf nicht laden: {e}")
+
+# Initialisiere Nachrichten, falls leer
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Bisherigen Chat-Verlauf im Bildschirm anzeigen
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- NEUE EINGABE DES NUTZERS ---
+if prompt := st.chat_input(f"Schreibe etwas für Kunde {aktueller_kunde}..."):
+    # Nutzer-Nachricht hinzufügen
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Antwort der KI generieren
-    with st.chat_message("assistant"):
-        with st.spinner("Die Kälte-KI denkt nach..."):
+    # Antwort von OpenAI generieren lassen
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+        )
+        assistant_reply = response.choices[0].message.content
+        
+        # KI-Antwort hinzufügen
+        st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+        with st.chat_message("assistant"):
+            st.markdown(assistant_reply)
             
-            # Kontext aus der Wissensdatenbank an den Prompt anhängen
-            full_prompt = prompt
-            if st.session_state.knowledge_base:
-                full_prompt = f"Nutze folgendes Fachwissen aus hochgeladenen Dokumenten:\n{st.session_state.knowledge_base}\n\nFrage des Nutzers: {prompt}"
+        # --- CHAT IN SUPABASE ABSPEICHERN ---
+        # Prüfen ob der Kunde schon in der DB ist, ansonsten updaten/einfügen
+        existing = supabase.table("chat_verlaeufe").select("id").eq("kunde", aktueller_kunde).execute()
+        
+        if existing.data and len(existing.data) > 0:
+            # Update bestehender Eintrag
+            supabase.table("chat_verlaeufe").update({"nachrichten": st.session_state.messages}).eq("kunde", aktueller_kunde).execute()
+        else:
+            # Neuer Eintrag
+            supabase.table("chat_verlaeufe").insert({"kunde": aktueller_kunde, "nachrichten": st.session_state.messages}).execute()
 
-            # Nachrichten für OpenAI vorbereiten
-            messages_for_api = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-            messages_for_api[-1]["content"] = full_prompt # Letzte Nachricht mit dem Wissens-Kontext anreichern
-
-            try:
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages_for_api
-                )
-                assistant_reply = response.choices[0].message.content
-                st.markdown(assistant_reply)
-                
-                # Antwort zum Verlauf hinzufügen
-                st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
-                
-            except Exception as e:
-                st.error(f"Fehler bei der Anfrage an OpenAI: {e}")
+    except Exception as e:
+        st.error(f"Fehler bei der Anfrage an OpenAI: {e}")
