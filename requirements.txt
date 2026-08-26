@@ -1,4 +1,5 @@
 streamlit
 openai
-python-dotenv
+supabase
 pypdf
+pillow
