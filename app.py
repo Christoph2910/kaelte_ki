@@ -11,7 +11,7 @@ import base64
 st.set_page_config(page_title="Coolify ❄️", page_icon="❄️", layout="centered")
 
 # Titel der App
-st.title("Coolify ❄️ – Deine Kälte-KI & Projekt-Akte")
+st.title("Coolify ❄️")
 
 # Verbindung zu Supabase & OpenAI laden
 try:
