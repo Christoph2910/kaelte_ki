@@ -7,11 +7,11 @@ import io
 from PIL import Image
 import base64
 
-# Seitenkonfiguration (Browser-Tab Name und Layout)
+# Seitenkonfiguration
 st.set_page_config(page_title="Coolify ❄️", page_icon="❄️", layout="centered")
 
 # Titel der App
-st.title("Coolify ❄️")
+st.title("Coolify ❄️ – Deine Kälte-KI & Projekt-Akte")
 
 # Verbindung zu Supabase & OpenAI laden
 try:
@@ -28,7 +28,7 @@ try:
 except Exception as e:
     st.error(f"Fehler bei den OpenAI Secrets: {e}")
 
-# --- SEITENLEISTE: KUNDEN-AUSWAHL ---
+# --- SEITENLEISTE: KUNDEN & DOKUMENTE AUFRÄUMEN ---
 st.sidebar.header("📁 Kunden-Akte / Chat")
 
 # Kunden aus Supabase laden
@@ -49,7 +49,38 @@ else:
 
 st.sidebar.markdown(f"**Aktuelles Projekt:** `{aktueller_kunde}`")
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Tipp:** Du kannst unten im Chat per Kamera-Symbol Bilder hochladen oder über den Button Dokumente für das Projekt füttern!")
+
+# Hier wandert der Upload-Button hin: Sauber und versteckt in der Seitenleiste!
+st.sidebar.header("📂 Projekt-Wissen")
+with st.sidebar.expander("📄 PDF / TXT hochladen"):
+    uploaded_doc = st.file_uploader("Datei wählen", type=["pdf", "txt"], label_visibility="collapsed")
+    
+    if uploaded_doc is not None:
+        if st.button("💾 Einlesen & Speichern"):
+            file_content = ""
+            if uploaded_doc.type == "application/pdf":
+                try:
+                    reader = pypdf.PdfReader(uploaded_doc)
+                    for page in reader.pages:
+                        text = page.extract_text()
+                        if text:
+                            file_content += text + "\n"
+                except Exception as e:
+                    st.error(f"Fehler beim Lesen der PDF: {e}")
+            else:
+                file_content = uploaded_doc.getvalue().decode("utf-8", errors="ignore")
+
+            if file_content:
+                try:
+                    supabase.table("dokumente").insert({
+                        "name": f"[{aktueller_kunde}] {uploaded_doc.name}",
+                        "inhalt": file_content
+                    }).execute()
+                    st.sidebar.success(f"Gelernt: {uploaded_doc.name}! 🧊")
+                except Exception as e:
+                    st.sidebar.error(f"Fehler: {e}")
+
+st.sidebar.info("💡 **Tipp:** Nutze im Chat das Plus/Kamera-Symbol für Fotos von Anlagen.")
 
 # --- CHAT-VERLAUF LADEN ---
 if "current_kunde" not in st.session_state or st.session_state["current_kunde"] != aktueller_kunde:
@@ -66,43 +97,10 @@ if "current_kunde" not in st.session_state or st.session_state["current_kunde"] 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Chat-Verlauf anzeigen
+# Chat-Verlauf anzeigen (Schön sauber ohne störende Balken dazwischen)
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
-# --- DIREKTER DOKUMENTEN-UPLOAD (NEBEN DEM CHAT ODER KOMPAKT DARUNTER) ---
-# Wir machen es elegant direkt über dem Eingabefeld in einer schmalen Zeile
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.markdown(f"💬 *Chatte mit Coolify für Projekt:* **{aktueller_kunde}**")
-with col2:
-    # Kompakter Datei-Upload-Button
-    uploaded_doc = st.file_uploader("PDF/TXT hochladen", type=["pdf", "txt"], label_visibility="collapsed")
-
-if uploaded_doc is not None:
-    file_content = ""
-    if uploaded_doc.type == "application/pdf":
-        try:
-            reader = pypdf.PdfReader(uploaded_doc)
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    file_content += text + "\n"
-        except Exception as e:
-            st.error(f"Fehler beim Lesen der PDF: {e}")
-    else:
-        file_content = uploaded_doc.getvalue().decode("utf-8", errors="ignore")
-
-    if file_content:
-        try:
-            supabase.table("dokumente").insert({
-                "name": f"[{aktueller_kunde}] {uploaded_doc.name}",
-                "inhalt": file_content
-            }).execute()
-            st.success(f"🧊 Dokument erfolgreich eingelesen & gelernt: {uploaded_doc.name}!")
-        except Exception as e:
-            st.error(f"Fehler beim Speichern in Supabase: {e}")
 
 # --- NEUE EINGABE DES NUTZERS ---
 if prompt := st.chat_input(f"Frag Coolify etwas zu {aktueller_kunde} (Text oder Bild)..."):
@@ -127,7 +125,7 @@ if prompt := st.chat_input(f"Frag Coolify etwas zu {aktueller_kunde} (Text oder 
         "Du bist 'Coolify', ein absolut cooler, verlässlicher und kompetenter Experte für Kälte- und Klimatechnik 🧊❄️. "
         "Du hast eine lockere, zupackende Art, sprichst den Nutzer auf Augenhöhe an und liebst präzise Handwerksarbeit. "
         "Antworte immer passend mit Emojis (wie ❄️, 🥶, 🔧, ⚡, 🧊, ✅), um deinen Antworten Persönlichkeit und Leben einzuhauchen. "
-        "Nutze die folgenden hochgeladenen Dokumente/Wissensdatenbank-Auszüge, um die technischen Fragen des Nutzers (z.B. zu Anlagen, Fehlern, Schaltplänen oder Typenschildern) perfekt zu beantworten:\n"
+        "Nutze die folgenden hochgeladenen Dokumente/Wissensdatenbank-Auszüge, um die technischen Fragen des Nutzers perfekt zu beantworten:\n"
         f"{kontext_wissen}"
     )
 
